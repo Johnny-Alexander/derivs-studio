@@ -1,0 +1,17 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "v2",
+      "runtimeExecutable": "/usr/bin/python3",
+      "runtimeArgs": ["v2/.devserver.py", "8765"],
+      "port": 8765
+    },
+    {
+      "name": "v3",
+      "runtimeExecutable": "/usr/bin/python3",
+      "runtimeArgs": ["v3/.devserver.py", "8766"],
+      "port": 8766
+    }
+  ]
+}

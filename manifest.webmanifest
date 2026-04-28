@@ -1,0 +1,16 @@
+{
+  "name": "Black-Scholes Options Studio",
+  "short_name": "BSM Studio",
+  "description": "Price and visualize vanilla options strategies with live Greeks.",
+  "start_url": "./black-scholes.html",
+  "scope": "./",
+  "display": "standalone",
+  "orientation": "any",
+  "background_color": "#07080f",
+  "theme_color": "#07080f",
+  "categories": ["finance", "utilities"],
+  "icons": [
+    { "src": "./icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any" },
+    { "src": "./icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "maskable" }
+  ]
+}
