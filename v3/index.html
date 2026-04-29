@@ -27,7 +27,9 @@
   <div class="switcher" id="productSwitcher">
     <button class="on" data-id="vanilla">Vanilla Multi-Leg</button>
     <button data-id="digital">Digital</button>
+    <button data-id="barrier">Barrier</button>
     <button data-id="autocallable">Autocallable</button>
+    <button data-id="cliquet">Cliquet</button>
   </div>
 
   <div class="grid">
@@ -36,8 +38,7 @@
   </div>
 
   <footer>
-    Educational. Assumes Black–Scholes / GBM dynamics — constant vol and rates, no skew, no jumps.
-    Autocallable is priced by Monte Carlo in a web worker.
+    Educational. Closed-form pricers for vanillas/digitals/barriers under GBM; Heston via Carr–Madan FFT (vanillas) and full-truncation Euler MC (exotics). Autocallable, barrier (Heston), and cliquet are priced by Monte Carlo in a web worker.
   </footer>
 </div>
 

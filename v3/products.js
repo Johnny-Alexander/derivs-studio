@@ -272,10 +272,218 @@ export const Autocallable = {
   }
 };
 
+// Continuous-monitoring barrier (knock-in / knock-out, single-asset).
+//
+// MC: walk the path on a fine grid (252 obs/yr) and check the barrier at each
+// step. Brownian-bridge correction would shrink the discretization bias on the
+// touch probability — a worthwhile v4 add — but we sidestep it for now by using
+// a fine grid. The bias still discounts the touch probability slightly; users
+// running closed-form A/B (under GBM) will see MC under-knock by ~1–2% on
+// short maturities.
+//
+// Closed form: bsBarrier (Reiner–Rubinstein) under GBM via model.analyticBarrier.
+// Heston has no closed form for barriers, so it falls back to MC.
+export const Barrier = {
+  id: 'barrier',
+  name: 'Barrier (single-asset)',
+  defaultSpec(market) {
+    const S = market.S;
+    return {
+      barrierType: 'up-and-out',     // up-and-out | up-and-in | down-and-out | down-and-in
+      optionType:  'call',           // call | put
+      side:        'long',
+      strike:      roundStrike(S),
+      barrier:     roundStrike(S * 1.20),
+      days:        90,
+      qty:         1
+    };
+  },
+  // Fine grid for continuous-monitoring approximation: ~252 steps/year.
+  requiredGrid(spec) {
+    const T = spec.days / 365;
+    const obsPerYear = 252;
+    const n = Math.max(2, Math.ceil(T * obsPerYear));
+    const grid = new Float64Array(n + 1);
+    for (let i = 0; i <= n; i++) grid[i] = T * i / n;
+    return grid;
+  },
+  evaluatePath(spec, grid, path, market) {
+    const T = grid[grid.length - 1];
+    const discount = Math.exp(-market.r * T);
+    const isUp   = spec.barrierType === 'up-and-out'   || spec.barrierType === 'up-and-in';
+    const isOut  = spec.barrierType === 'up-and-out'   || spec.barrierType === 'down-and-out';
+    const B = spec.barrier;
+
+    // Walk the path, look for first touch (excluding t=0 — assumed not breached).
+    let firstTouchStep = -1;
+    for (let i = 1; i < path.length; i++) {
+      const breached = isUp ? (path[i] >= B) : (path[i] <= B);
+      if (breached) { firstTouchStep = i; break; }
+    }
+    const touched = firstTouchStep >= 0;
+    const alive = isOut ? !touched : touched;
+
+    let pv = 0;
+    if (alive) {
+      const S_T = path[path.length - 1];
+      const intrinsic = spec.optionType === 'call'
+        ? Math.max(S_T - spec.strike, 0)
+        : Math.max(spec.strike - S_T, 0);
+      const sign = spec.side === 'long' ? 1 : -1;
+      pv = sign * spec.qty * intrinsic * discount;
+    }
+    return { pv, touched, firstTouchStep, alive };
+  },
+  auxInit(spec) {
+    const T = spec.days / 365;
+    const obsPerYear = 252;
+    const n = Math.max(2, Math.ceil(T * obsPerYear));
+    return {
+      // touchByStep[i] = paths whose *first* touch was at step i (1-indexed).
+      touchByStep: new Array(n).fill(0),
+      neverTouched: 0,
+      aliveAtMaturity: 0,
+      knockedAtMaturity: 0
+    };
+  },
+  accumulate(spec, result, path, aux) {
+    if (result.firstTouchStep > 0) {
+      aux.touchByStep[result.firstTouchStep - 1]++;
+    } else {
+      aux.neverTouched++;
+    }
+    if (result.alive) aux.aliveAtMaturity++;
+    else aux.knockedAtMaturity++;
+  },
+  auxFinalize(spec, aux, nPaths) {
+    // Cumulative P(touched by step i)
+    const n = aux.touchByStep.length;
+    const cumulativeTouch = new Array(n);
+    let cum = 0;
+    for (let i = 0; i < n; i++) {
+      cum += aux.touchByStep[i] / nPaths;
+      cumulativeTouch[i] = cum;
+    }
+    return {
+      cumulativeTouch,
+      probTouchAny: cum,
+      probAlive: aux.aliveAtMaturity / nPaths,
+      nPaths
+    };
+  },
+  analyticPrice(spec, model, market, modelParams) {
+    if (!model.analyticBarrier) return null;
+    const T = spec.days / 365;
+    const g = model.analyticBarrier(spec.barrierType, spec.optionType,
+                                    market.S, spec.strike, T,
+                                    market, modelParams, spec.barrier);
+    const sign = spec.side === 'long' ? 1 : -1;
+    const mul = sign * spec.qty;
+    const out = {};
+    for (const k of Object.keys(g)) out[k] = mul * g[k];
+    return out;
+  }
+};
+
+// Cliquet / forward-start ladder. Path-dependent, smile-sensitive — the
+// showcase product for "calibrate Heston, then see how the cliquet repriced".
+//
+// Mechanics: per-period return r_i = S_i / S_{i-1} - 1, capped/floored
+// pointwise, then summed and capped/floored globally. Payoff = notional *
+// max(globalFloor, min(globalCap, sum)).
+//
+// MC only — no closed form even under GBM (sum of caplet/floorlet pairs has
+// correlation across resets that doesn't factor cleanly).
+export const Cliquet = {
+  id: 'cliquet',
+  name: 'Cliquet (capped/floored)',
+  defaultSpec(market) {
+    return {
+      years:       1,
+      resets:      12,         // monthly resets
+      localCap:    0.04,       // +4% per period
+      localFloor: -0.02,       // -2% per period
+      globalCap:   0.20,       // +20% over the deal
+      globalFloor: 0.0,        // capital protected at par
+      notional:    100,
+      side:        'long'
+    };
+  },
+  requiredGrid(spec) {
+    const n = Math.max(1, Math.floor(spec.resets));
+    const T = spec.years;
+    const grid = new Float64Array(n + 1);
+    for (let i = 0; i <= n; i++) grid[i] = T * i / n;
+    return grid;
+  },
+  evaluatePath(spec, grid, path, market) {
+    const T = grid[grid.length - 1];
+    const discount = Math.exp(-market.r * T);
+    const n = path.length - 1;
+    let sum = 0;
+    const cappedRets = new Array(n);
+    for (let i = 1; i <= n; i++) {
+      const r = path[i] / path[i - 1] - 1;
+      const c = Math.max(spec.localFloor, Math.min(spec.localCap, r));
+      cappedRets[i - 1] = c;
+      sum += c;
+    }
+    const globalRet = Math.max(spec.globalFloor, Math.min(spec.globalCap, sum));
+    const sign = spec.side === 'long' ? 1 : -1;
+    const pv = sign * spec.notional * globalRet * discount;
+    return { pv, globalRet, cappedRets };
+  },
+  auxInit(spec) {
+    const n = Math.max(1, Math.floor(spec.resets));
+    return {
+      // Aggregated histogram of capped per-period returns
+      retSamples: [],   // flat array; sampled for cliquet histogram
+      globalRetSamples: [],
+      // Per-period distribution stats
+      perPeriodSum: new Float64Array(n),
+      perPeriodCount: new Int32Array(n),
+      cappedAtUpper: 0,        // count of period-rets pinned to localCap
+      cappedAtLower: 0,        // count pinned to localFloor
+      sampleCap: 4000          // flat histogram cap
+    };
+  },
+  accumulate(spec, result, path, aux) {
+    const eps = 1e-9;
+    const rets = result.cappedRets;
+    for (let i = 0; i < rets.length; i++) {
+      aux.perPeriodSum[i] += rets[i];
+      aux.perPeriodCount[i]++;
+      if (rets[i] >= spec.localCap - eps) aux.cappedAtUpper++;
+      else if (rets[i] <= spec.localFloor + eps) aux.cappedAtLower++;
+      if (aux.retSamples.length < aux.sampleCap) aux.retSamples.push(rets[i]);
+    }
+    aux.globalRetSamples.push(result.globalRet);
+  },
+  auxFinalize(spec, aux, nPaths) {
+    const n = aux.perPeriodSum.length;
+    const meanPerPeriod = new Array(n);
+    for (let i = 0; i < n; i++) {
+      meanPerPeriod[i] = aux.perPeriodCount[i] > 0
+        ? aux.perPeriodSum[i] / aux.perPeriodCount[i] : 0;
+    }
+    const totalRets = nPaths * n;
+    return {
+      meanPerPeriod,
+      retSamples: aux.retSamples,
+      globalRetSamples: aux.globalRetSamples,
+      probUpperCap: aux.cappedAtUpper / Math.max(1, totalRets),
+      probLowerCap: aux.cappedAtLower / Math.max(1, totalRets),
+      nPaths
+    };
+  }
+};
+
 export const PRODUCTS = {
   vanilla: VanillaPortfolio,
   digital: EuropeanDigital,
-  autocallable: Autocallable
+  autocallable: Autocallable,
+  barrier: Barrier,
+  cliquet: Cliquet
 };
 
 function roundStrike(S) {

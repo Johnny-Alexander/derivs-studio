@@ -193,6 +193,7 @@ header.top {
   color: var(--text); cursor: pointer; transition: all .12s;
 }
 .preset:hover { border-color: var(--line-strong); background: rgba(125,211,252,0.08); color: var(--accent); }
+.preset.on    { border-color: rgba(125,211,252,0.4); background: rgba(125,211,252,0.14); color: var(--accent); }
 
 .btn-add {
   margin-top: 10px; width: 100%; padding: 10px; border-radius: 10px;

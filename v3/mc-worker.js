@@ -6,15 +6,19 @@
 //     a flat `path` (the spot slice) to product.evaluatePath, so all v2
 //     products keep working unchanged. Products that want full state can read
 //     it from a second arg passed only when stateDim > 1.
-//   - Sampling modes: 'pseudo' (default), 'antithetic'. Antithetic mirrors
-//     each block of normals; the engine averages the (Z, -Z) pair into one
-//     accumulated PV, halving variance for symmetric payoffs.
+//   - Sampling modes:
+//       'pseudo'      — mulberry32 + Marsaglia polar (default)
+//       'antithetic'  — pseudo + (Z, -Z) mirror, halving variance for symmetric payoffs
+//       'sobol'       — Joe-Kuo Sobol' + Cranley-Patterson rotation +
+//                       Acklam inverse-normal CDF.  Sobol is used for the first
+//                       SOBOL_MAX_DIM dims of each path; the tail uses pseudo.
 //   - Control-variate hook: if product.controlVariate(spec, market, modelParams)
 //     returns { analyticPV, evaluateOnPath(grid, path) -> pvCV }, the worker
 //     subtracts (pvCV - analyticPV) from each path's PV. Mean is unchanged in
 //     expectation but variance drops for products with a correlated CV.
 
 import { mulberry32, makeNormal, welford } from './core.js';
+import { createSobolNormal } from './sobol.js';
 import { MODELS } from './models.js';
 import { PRODUCTS } from './products.js';
 
@@ -47,6 +51,9 @@ function run({
 
   const rng = mulberry32(seed);
   const randn = makeNormal(rng);
+  const sobNormal = sampling === 'sobol'
+    ? createSobolNormal({ dim: normalsLen, seed })
+    : null;
 
   // Path = the spot slice of state. We always pass `path` (Float64Array of
   // length grid.length) to product.evaluatePath. Products that need full state
@@ -66,14 +73,20 @@ function run({
 
   // Antithetic doubles the effective path count. We loop over pseudo-paths
   // and emit one (Z) or two (Z, -Z) MC samples each. nPaths is the number of
-  // *Welford pushes*, so antithetic runs nPaths/2 base draws.
+  // *Welford pushes*, so antithetic runs nPaths/2 base draws. Sobol is its
+  // own scheme — never mirror Sobol points, that breaks equidistribution.
   const antithetic = sampling === 'antithetic';
   const baseLoops = antithetic ? Math.ceil(nPaths / 2) : nPaths;
   const reportEvery = Math.max(1, Math.floor(baseLoops / 20));
 
+  function fillNormals() {
+    if (sobNormal) sobNormal.next(normals);
+    else for (let i = 0; i < normalsLen; i++) normals[i] = randn();
+  }
+
   let pushed = 0;
   for (let p = 0; p < baseLoops && pushed < nPaths; p++) {
-    for (let i = 0; i < normalsLen; i++) normals[i] = randn();
+    fillNormals();
     pushed += runOne(model, product, spec, grid, market, modelParams,
                      state, path, normals, stateDim, cv, w, aux, nPaths - pushed);
 
