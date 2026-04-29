@@ -223,8 +223,11 @@ localvolUI = mountLocalVol({
   host: inputsSlot,
   ctx: { getMarket: () => state.market, getModel: () => state.model },
   applyParams: (p) => {
+    // Mount-time rebuild fires this even when LV is not the active model;
+    // don't clobber GBM/Heston params with the LV-shaped object.
+    if (state.model.id !== 'localvol') return;
     state.model.params = { ...p };
-    if (currentUI && currentUI.recompute && state.model.id === 'localvol') currentUI.recompute();
+    if (currentUI && currentUI.recompute) currentUI.recompute();
   }
 });
 localvolUI.setVisible(state.model.id === 'localvol');
