@@ -156,6 +156,7 @@ export function mountAutocallable({ inputsSlot, outputsSlot, ctx }) {
       productId: 'autocallable', spec, modelId: model.id,
       modelParams: model.params, market, nPaths,
       seed: 1337,
+      sampling: ctx.getSampling ? ctx.getSampling() : 'pseudo',
       onProgress: ({ done, total, mean, stderr }) => {
         setBar(`Simulating… price ≈ ${fmtPrice(mean, spec.notional)}`, done, total);
       },

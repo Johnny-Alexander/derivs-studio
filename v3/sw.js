@@ -1,4 +1,4 @@
-const CACHE = 'derivs-studio-v3-2';
+const CACHE = 'derivs-studio-v3-5';
 const ASSETS = [
   './',
   './index.html',
@@ -13,7 +13,12 @@ const ASSETS = [
   './ui-vanilla.js',
   './ui-digital.js',
   './ui-autocallable.js',
+  './ui-barrier.js',
+  './ui-cliquet.js',
   './ui-calibration.js',
+  './ui-localvol.js',
+  './localvol.js',
+  './sobol.js',
   './jobs.js',
   './transforms.js',
   './surface.js',

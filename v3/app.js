@@ -10,17 +10,26 @@ import { PRODUCTS } from './products.js';
 import { mountVanilla } from './ui-vanilla.js';
 import { mountDigital } from './ui-digital.js';
 import { mountAutocallable } from './ui-autocallable.js';
+import { mountBarrier } from './ui-barrier.js';
+import { mountCliquet } from './ui-cliquet.js';
 import { mountCalibration } from './ui-calibration.js';
+import { mountLocalVol } from './ui-localvol.js';
 
-// Forward-declare so updateModelInfo() can toggle calibration visibility before
-// the calibration card is actually constructed. Assigned later in this file.
+// Forward-declare so updateModelInfo() can toggle calibration / LV visibility
+// before those cards are actually constructed. Assigned later in this file.
 let calibrationUI = null;
+let localvolUI = null;
 
 // state.model.params holds the active model's params. It is rebuilt from the
 // model's paramSchema whenever the user switches models.
 const state = {
   market: { S: 100, r: 0.045, q: 0.00 },
-  model:  { id: 'gbm', params: defaultParams('gbm'), disabled: false }
+  model:  { id: 'gbm', params: defaultParams('gbm'), disabled: false },
+  // MC sampling mode applies to every product UI that runs Monte Carlo.
+  // 'pseudo' is the safe default; 'antithetic' halves variance for
+  // payoff-symmetric runs at no extra cost; 'sobol' is QMC with a small
+  // Joe-Kuo direction set + Cranley-Patterson rotation.
+  mc: { sampling: 'pseudo' }
 };
 
 function defaultParams(modelId) {
@@ -65,6 +74,17 @@ modelCard.innerHTML = `
     </div>
     <div id="modelDesc" style="font-size:12px;color:var(--text-mute);line-height:1.5;margin-bottom:10px"></div>
     <div id="modelParams" class="inputs-grid"></div>
+    <div style="margin-top:14px;padding-top:10px;border-top:1px solid var(--border)">
+      <div style="font-size:11px;color:var(--text-mute);text-transform:uppercase;letter-spacing:0.06em;margin-bottom:6px">Monte Carlo sampler</div>
+      <div style="display:flex;gap:6px;flex-wrap:wrap" id="mcSamplerRow">
+        <button class="preset on" data-sampling="pseudo">Pseudo</button>
+        <button class="preset" data-sampling="antithetic">Antithetic</button>
+        <button class="preset" data-sampling="sobol">Sobol' (QMC)</button>
+      </div>
+      <div style="font-size:11px;color:var(--text-dim);line-height:1.5;margin-top:6px" id="mcSamplerHint">
+        Pseudo-random Marsaglia normals — baseline.
+      </div>
+    </div>
   </div>
 `;
 
@@ -142,6 +162,7 @@ function updateModelInfo() {
   modelCard.querySelector('#modelHint').textContent = m.disabled ? 'stub' : 'ready';
   state.model.disabled = !!m.disabled;
   if (calibrationUI) calibrationUI.setVisible(state.model.id === 'heston');
+  if (localvolUI)    localvolUI.setVisible(state.model.id === 'localvol');
 }
 updateModelInfo();
 renderModelParams();
@@ -152,6 +173,9 @@ modelSelect.addEventListener('change', () => {
   updateModelInfo();
   renderModelParams();
   if (state.model.disabled) return;
+  // LV's paramSchema is empty — its real params (iv/lv/atmSigma) come from
+  // the surface card. Re-run rebuild so they get pushed into state.model.params.
+  if (state.model.id === 'localvol' && localvolUI) localvolUI.rebuild();
   rebuildCurrentProduct();
 });
 
@@ -174,6 +198,11 @@ divEl.value  = (state.market.q * 100).toFixed(2);
 inputsSlot.appendChild(marketCard);
 inputsSlot.appendChild(modelCard);
 
+// Declared before calibration/LV mount so their applyParams callbacks (which
+// fire on initial rebuild) can reference currentUI without hitting the TDZ.
+let currentProduct = 'vanilla';
+let currentUI = null;
+
 // ---- Calibration card (Heston-only). Shown/hidden by updateModelInfo. ----
 calibrationUI = mountCalibration({
   host: inputsSlot,
@@ -188,10 +217,40 @@ calibrationUI = mountCalibration({
 });
 calibrationUI.setVisible(state.model.id === 'heston');
 
+// ---- Local-vol surface card (LV-only). Owns the IV surface + Dupire result;
+// pushes both into state.model.params for sim/pricing.
+localvolUI = mountLocalVol({
+  host: inputsSlot,
+  ctx: { getMarket: () => state.market, getModel: () => state.model },
+  applyParams: (p) => {
+    state.model.params = { ...p };
+    if (currentUI && currentUI.recompute && state.model.id === 'localvol') currentUI.recompute();
+  }
+});
+localvolUI.setVisible(state.model.id === 'localvol');
+
+// ---- Sampler picker ----
+const samplerRow = modelCard.querySelector('#mcSamplerRow');
+const samplerHint = modelCard.querySelector('#mcSamplerHint');
+const SAMPLER_HINTS = {
+  pseudo:     'Pseudo-random Marsaglia normals — baseline.',
+  antithetic: 'Each block of normals is paired with its negation. Halves variance for symmetric payoffs at no extra simulation cost.',
+  sobol:      "Joe-Kuo Sobol' + Cranley-Patterson rotation, inverse-normal CDF. First 17 dims are QMC; tail falls back to pseudo. Big win on smooth payoffs."
+};
+samplerRow.addEventListener('click', e => {
+  const b = e.target.closest('button[data-sampling]');
+  if (!b) return;
+  state.mc.sampling = b.dataset.sampling;
+  samplerRow.querySelectorAll('button').forEach(x => x.classList.toggle('on', x === b));
+  samplerHint.textContent = SAMPLER_HINTS[state.mc.sampling];
+  if (currentUI && currentUI.recompute) currentUI.recompute();
+});
+
 // ---- Context passed to product UIs ----
 const ctx = {
   getMarket: () => state.market,
   getModel:  () => state.model,
+  getSampling: () => state.mc.sampling,
   // Effective vol for chart-axis sizing. Falls back to 0.25 if the model
   // doesn't expose one (shouldn't happen in v3, but stays safe).
   getEffectiveVol: () => {
@@ -201,9 +260,6 @@ const ctx = {
   }
 };
 
-let currentProduct = 'vanilla';
-let currentUI = null;
-
 function rebuildCurrentProduct() {
   mountProduct(currentProduct);
 }
@@ -211,8 +267,8 @@ function rebuildCurrentProduct() {
 function clearProductArea() {
   if (currentUI && currentUI.destroy) currentUI.destroy();
   currentUI = null;
-  // Keep the fixed left-column cards: Market, Model, Calibration.
-  while (inputsSlot.childNodes.length > 3) inputsSlot.removeChild(inputsSlot.lastChild);
+  // Keep the fixed left-column cards: Market, Model, Calibration, LocalVol.
+  while (inputsSlot.childNodes.length > 4) inputsSlot.removeChild(inputsSlot.lastChild);
   while (outputsSlot.firstChild) outputsSlot.removeChild(outputsSlot.firstChild);
 }
 
@@ -224,6 +280,8 @@ function mountProduct(id) {
   if (id === 'vanilla')      currentUI = mountVanilla(opts);
   else if (id === 'digital') currentUI = mountDigital(opts);
   else if (id === 'autocallable') currentUI = mountAutocallable(opts);
+  else if (id === 'barrier') currentUI = mountBarrier(opts);
+  else if (id === 'cliquet') currentUI = mountCliquet(opts);
 }
 
 switcher.addEventListener('click', e => {

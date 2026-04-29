@@ -25,7 +25,7 @@ export function priceAnalytic({ productId, spec, modelId, modelParams, market })
 //   onError(err)
 //
 // v3 options:
-//   sampling: 'pseudo' (default) | 'antithetic'
+//   sampling: 'pseudo' (default) | 'antithetic' | 'sobol'
 //   Control variates are auto-detected from product.controlVariate — no flag.
 export function priceMonteCarlo({
   productId, spec, modelId, modelParams, market,

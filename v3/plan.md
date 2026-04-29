@@ -305,9 +305,10 @@ follows in days. **This is the headline feature of v3** — everything before it
 is enabling work, everything after consumes the calibrated model.
 
 **Phase 4 — Smile-sensitive products.**
-Barriers, Asians (with geometric CV), lookback, cliquet, varswap. Each gets a
-`ui-*.js`. Cliquet is the demo product for "calibrate → price → see how much
-the model choice matters".
+v3 ships **Barriers** (closed form via Reiner–Rubinstein under GBM, MC under
+Heston) and **Cliquet** (MC only, the demo product for "calibrate → price →
+see how much the model choice matters"). Asian, lookback, and variance swap
+are explicitly **deferred to v4** — see §12.
 
 **Phase 5 — Local vol & SLV.**
 Dupire from the calibrated/edited surface. SLV particle calibration. Visualize
@@ -347,3 +348,29 @@ exportable reports. If multi-asset is going to ship in v3, it slots in here.
   *move* — the whole point of v3.
 - All v2 prices are reproduced exactly under GBM (regression, not regression-
   with-asterisks). The plumbing rewrite must be invisible to v2 users.
+
+---
+
+## 12. Deferred to v4
+
+Items punted out of v3 to keep scope tight. Each is "ready to write" — the
+plumbing is already in place, only the product/UI files are missing.
+
+- **Asian options** (arithmetic and geometric average). MC only with the
+  geometric-average control variate (the `controlVariate` hook on the product
+  interface is already plumbed in `mc-worker.js` — just needs a producer). The
+  control variate is the v4 demo for "MC variance reduction in action".
+- **Lookback options** (fixed-strike and floating-strike, on min/max of the
+  path). Closed form under GBM, MC otherwise. Sub-grid Brownian-bridge for
+  the running max/min would shrink discretization bias — same hook a
+  Brownian-bridge correction for barriers would use.
+- **Variance swap & volatility swap.** Variance swap has a model-free strip
+  replication that's a fun visual; volatility swap is MC-only with a convexity
+  adjustment. Pairs naturally with the calibration card (use the calibrated
+  Heston to price varswap, then check vs the strip price).
+- **Brownian-bridge correction for barriers.** v3 ships barriers with a fine
+  grid (252 obs/yr) and accepts the discrete-monitoring bias (~5–15% on short
+  maturities). Adding the per-step bridge correction would close that gap and
+  let users run barriers with much coarser grids.
+- **Multi-asset / basket / worst-of.** Requires extending the model interface
+  to `simulatePathsMulti`. Out of scope for v4 too unless a use case forces it.

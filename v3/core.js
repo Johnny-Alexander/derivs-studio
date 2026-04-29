@@ -92,6 +92,131 @@ export function bsDigital(type, S, K, T, r, q, v) {
   return { price, delta, gamma, vega, theta, rho };
 }
 
+// ----- Continuous-monitoring barrier options (Reiner-Rubinstein) -----
+//
+// Single-asset, constant-vol GBM. Barrier is monitored continuously; we use
+// the standard 4-block formula:
+//   A = vanilla call/put with strike K
+//   B = vanilla call/put with strike B (the barrier)
+//   C = "image" term using y1 = ln(B^2/(SK))/(σ√T) + (1+μ)σ√T
+//   D = "image" term using y2 = ln(B/S)/(σ√T) + (1+μ)σ√T
+// where μ = (r-q)/σ² - 1/2, eta = +1 for down barrier, -1 for up,
+// and phi = +1 for call, -1 for put.
+//
+// For barrier=B above the strike with up-and-in/up-and-out parity, we use:
+//   knock-out + knock-in = vanilla
+//
+// barrierType: 'up-and-out' | 'up-and-in' | 'down-and-out' | 'down-and-in'
+// type: 'call' | 'put'
+// rebate ignored (treated as 0). Live-from-start (no time-to-knockin delay).
+//
+// Returns { price, delta, gamma, vega, theta, rho } via finite differences on
+// the closed form (analytic Greeks for barriers are doable but not worth the
+// page-of-algebra for v3).
+export function bsBarrier(barrierType, type, S, K, T, r, q, v, B) {
+  // Knockout when already past barrier ⇒ worthless (no rebate).
+  if (T <= 0 || v <= 0) {
+    if ((barrierType === 'up-and-out' && S >= B) || (barrierType === 'down-and-out' && S <= B)) {
+      return { price: 0, delta: 0, gamma: 0, vega: 0, theta: 0, rho: 0 };
+    }
+    if ((barrierType === 'up-and-in' && S >= B) || (barrierType === 'down-and-in' && S <= B)) {
+      return bs(type, S, K, T, r, q, v);
+    }
+    const intrinsic = type === 'call' ? Math.max(S - K, 0) : Math.max(K - S, 0);
+    return { price: intrinsic, delta: 0, gamma: 0, vega: 0, theta: 0, rho: 0 };
+  }
+  // Already-knocked: no rebate, dead.
+  if ((barrierType === 'up-and-out'  && S >= B)) return { price: 0, delta: 0, gamma: 0, vega: 0, theta: 0, rho: 0 };
+  if ((barrierType === 'down-and-out' && S <= B)) return { price: 0, delta: 0, gamma: 0, vega: 0, theta: 0, rho: 0 };
+  // Already-knocked-in: same as vanilla.
+  if ((barrierType === 'up-and-in'  && S >= B)) return bs(type, S, K, T, r, q, v);
+  if ((barrierType === 'down-and-in' && S <= B)) return bs(type, S, K, T, r, q, v);
+
+  const price = barrierPrice(barrierType, type, S, K, T, r, q, v, B);
+
+  // FD greeks. Step sizes mirror the Heston greeks helper.
+  const hS = Math.max(0.01, S * 0.005);
+  const Pp = barrierPrice(barrierType, type, S + hS, K, T, r, q, v, B);
+  const Pm = barrierPrice(barrierType, type, S - hS, K, T, r, q, v, B);
+  const delta = (Pp - Pm) / (2 * hS);
+  const gamma = (Pp - 2 * price + Pm) / (hS * hS);
+
+  const hV = 0.005;
+  const Pv = barrierPrice(barrierType, type, S, K, T, r, q, v + hV, B);
+  const vega = (Pv - price) * (0.01 / hV);  // per 1% vol move
+
+  const hT = Math.max(1e-4, T * 0.01);
+  const Pt = barrierPrice(barrierType, type, S, K, T + hT, r, q, v, B);
+  const theta = -(Pt - price) / hT / 365;
+
+  const hR = 1e-4;
+  const Pr = barrierPrice(barrierType, type, S, K, T, r + hR, q, v, B);
+  const rho = (Pr - price) / hR / 100;
+
+  return { price, delta, gamma, vega, theta, rho };
+}
+
+// Inner closed-form pricer (no edge cases, no greeks). Returns price only.
+function barrierPrice(barrierType, type, S, K, T, r, q, v, B) {
+  const sqrtT = Math.sqrt(T);
+  const mu = (r - q) / (v * v) - 0.5;
+  const lambda = Math.sqrt(mu * mu + 2 * r / (v * v));
+  const phi = type === 'call' ? 1 : -1;
+  const eta = (barrierType === 'down-and-out' || barrierType === 'down-and-in') ? 1 : -1;
+
+  const x1 = Math.log(S / K) / (v * sqrtT) + (1 + mu) * v * sqrtT;
+  const x2 = Math.log(S / B) / (v * sqrtT) + (1 + mu) * v * sqrtT;
+  const y1 = Math.log(B * B / (S * K)) / (v * sqrtT) + (1 + mu) * v * sqrtT;
+  const y2 = Math.log(B / S) / (v * sqrtT) + (1 + mu) * v * sqrtT;
+
+  const eqT = Math.exp(-q * T);
+  const erT = Math.exp(-r * T);
+
+  const A = phi * S * eqT * N(phi * x1) - phi * K * erT * N(phi * x1 - phi * v * sqrtT);
+  const Bt = phi * S * eqT * N(phi * x2) - phi * K * erT * N(phi * x2 - phi * v * sqrtT);
+  const Cf = phi * S * eqT * Math.pow(B / S, 2 * (mu + 1)) * N(eta * y1)
+           - phi * K * erT * Math.pow(B / S, 2 * mu)       * N(eta * y1 - eta * v * sqrtT);
+  const D = phi * S * eqT * Math.pow(B / S, 2 * (mu + 1)) * N(eta * y2)
+           - phi * K * erT * Math.pow(B / S, 2 * mu)       * N(eta * y2 - eta * v * sqrtT);
+
+  // The mapping from {barrierType, K vs B} to A/B/C/D combinations.
+  // For S above the up barrier or below the down barrier we already returned
+  // above, so here we always have S strictly inside the live region.
+  let kiPrice;
+  const isUp = (eta === -1);
+  const Kabove = (K > B);
+
+  if (type === 'call') {
+    if (isUp) {
+      // up-and-in call:  K > B → A;  K < B → Bt - Cf + D
+      kiPrice = Kabove ? A : (Bt - Cf + D);
+    } else {
+      // down-and-in call: K > B → Cf;  K < B → A - Bt + D
+      kiPrice = Kabove ? Cf : (A - Bt + D);
+    }
+  } else {
+    if (isUp) {
+      // up-and-in put:  K > B → A - Bt + D;  K < B → Cf
+      kiPrice = Kabove ? (A - Bt + D) : Cf;
+    } else {
+      // down-and-in put: K > B → Bt - Cf + D;  K < B → A
+      kiPrice = Kabove ? (Bt - Cf + D) : A;
+    }
+  }
+
+  // Vanilla price for in-out parity.
+  const vanilla = bs(type, S, K, T, r, q, v).price;
+  const koPrice = Math.max(0, vanilla - kiPrice);
+
+  switch (barrierType) {
+    case 'up-and-in':
+    case 'down-and-in':  return Math.max(0, kiPrice);
+    case 'up-and-out':
+    case 'down-and-out': return koPrice;
+  }
+  return 0;
+}
+
 // Mulberry32 PRNG — fast, seedable, reproducible. Good enough for MC.
 export function mulberry32(seed) {
   let a = seed >>> 0;

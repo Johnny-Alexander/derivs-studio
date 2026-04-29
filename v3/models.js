@@ -21,8 +21,9 @@
 //
 // Keep this file importable by a Web Worker — no DOM access.
 
-import { bs, bsDigital } from './core.js';
+import { bs, bsDigital, bsBarrier } from './core.js';
 import { hestonCallPricer, putFromCall } from './transforms.js';
+import { lvAt, ivAt } from './localvol.js';
 
 // Fill in defaults so every model has both stateDim/normalsPerStep and both
 // simulatePath/simulateState. Idempotent.
@@ -73,6 +74,9 @@ export const GBM = attachDefaults({
   },
   analyticDigital(type, S0, K, T, market, params) {
     return bsDigital(type, S0, K, T, market.r, market.q, params.sigma);
+  },
+  analyticBarrier(barrierType, type, S0, K, T, market, params, B) {
+    return bsBarrier(barrierType, type, S0, K, T, market.r, market.q, params.sigma, B);
   },
   effectiveVol(params) { return params.sigma; }
 });
@@ -156,13 +160,126 @@ export const HESTON = attachDefaults({
     return hestonDigitalGreeks(type, S0, K, T, market, params);
   }
 });
-export const LV_STUB = {
+// Dupire local vol. params (set by ui-localvol) carries:
+//   - iv: { T, k, iv, nT, nK } — the source IV surface (raw arrays)
+//   - lv: { T, k, sigmaLoc, nT, nK } — precomputed σ_loc on the same grid
+//   - atmSigma: ATM IV at T=T[0] for chart axis sizing
+// paramSchema is empty: LV's "params" are the surface, not numeric sliders.
+export const LV = attachDefaults({
   id: 'localvol',
   name: 'Dupire Local Vol',
-  description: 'Coming in phase 3. Calibrated from an implied-vol surface you input.',
-  disabled: true,
-  paramSchema: []
-};
+  description: 'Deterministic σ(S, t) calibrated to reprice a given IV surface via Dupire. Vanillas reprice the surface by construction; exotics priced by MC.',
+  stateDim: 1,
+  normalsPerStep: 1,
+  paramSchema: [],
+  effectiveVol(params) { return params && params.atmSigma ? params.atmSigma : 0.20; },
+
+  // Euler on log S with σ = σ_loc(S_t, t) at the start of each step.
+  // If params.lv is missing (model just selected before the LV card has built
+  // a surface), falls back to a constant 20% vol so MC doesn't NaN out — the
+  // first paint after model switch shouldn't crash.
+  simulatePath(S0, grid, market, params, normals, out) {
+    const r = market.r, q = market.q;
+    const lv = params && params.lv;
+    out[0] = S0;
+    if (!lv) {
+      const sigma = 0.20;
+      for (let i = 1; i < grid.length; i++) {
+        const dt = grid[i] - grid[i - 1];
+        out[i] = out[i - 1] * Math.exp((r - q - 0.5 * sigma * sigma) * dt + sigma * Math.sqrt(dt) * normals[i - 1]);
+      }
+      return;
+    }
+    let S = S0;
+    for (let i = 1; i < grid.length; i++) {
+      const dt = grid[i] - grid[i - 1];
+      const t  = grid[i - 1];
+      const sigma = lvAt(lv, S0, r, q, S, t);
+      const drift = (r - q - 0.5 * sigma * sigma) * dt;
+      const diff  = sigma * Math.sqrt(dt) * normals[i - 1];
+      S = S * Math.exp(drift + diff);
+      out[i] = S;
+    }
+  },
+
+  // Vanillas under LV reprice the surface by construction: read σ_imp at
+  // (k, T) from the source IV grid, price via BS. FD greeks numerically.
+  analyticVanilla(type, S0, K, T, market, params) {
+    const ivp = params && params.iv;
+    if (T <= 0 || !ivp) {
+      const intrinsic = type === 'call' ? Math.max(S0 - K, 0) : Math.max(K - S0, 0);
+      return { price: intrinsic, delta: type === 'call' ? (S0 > K ? 1 : 0) : (S0 < K ? -1 : 0),
+               gamma: 0, vega: 0, theta: 0, rho: 0 };
+    }
+    const r = market.r, q = market.q;
+    const priceAt = (S, T_, r_) => {
+      const F = S * Math.exp((r_ - q) * T_);
+      const k = Math.log(K / F);
+      const sigma = ivAt(ivp, T_, k);
+      return bs(type, S, K, T_, r_, q, sigma).price;
+    };
+    const price = priceAt(S0, T, r);
+    const hS = Math.max(0.01, S0 * 0.005);
+    const Pp = priceAt(S0 + hS, T, r);
+    const Pm = priceAt(S0 - hS, T, r);
+    const delta = (Pp - Pm) / (2 * hS);
+    const gamma = (Pp - 2 * price + Pm) / (hS * hS);
+    const hT = Math.max(1e-4, T * 0.01);
+    const Pf = priceAt(S0, T + hT, r);
+    const theta = -(Pf - price) / hT / 365;
+    const hR = 1e-4;
+    const Pr = priceAt(S0, T, r + hR);
+    const rho = (Pr - price) / hR / 100;
+    // vega isn't well-defined under LV (the surface IS the vol), but to keep
+    // the UI happy we report a parallel-shift vega: bump every σ_imp by 1%.
+    const ivBump = { ...ivp, iv: Float64Array.from(ivp.iv).map(s => s + 0.01) };
+    const Pv = (() => {
+      const F = S0 * Math.exp((r - q) * T);
+      const k = Math.log(K / F);
+      const sigma = ivAt(ivBump, T, k);
+      return bs(type, S0, K, T, r, q, sigma).price;
+    })();
+    const vega = (Pv - price);  // per 1% parallel shift
+    return { price, delta, gamma, vega, theta, rho };
+  },
+
+  // Digital under LV: numerical -∂C/∂K on the surface-implied call price.
+  analyticDigital(type, S0, K, T, market, params) {
+    const ivp = params && params.iv;
+    if (T <= 0 || !ivp) {
+      const itm = type === 'call' ? S0 > K : S0 < K;
+      return { price: itm ? 1 : 0, delta: 0, gamma: 0, vega: 0, theta: 0, rho: 0 };
+    }
+    const r = market.r, q = market.q;
+    const callAt = (S, K_, T_, r_) => {
+      const F = S * Math.exp((r_ - q) * T_);
+      const kk = Math.log(K_ / F);
+      const sigma = ivAt(ivp, T_, kk);
+      return bs('call', S, K_, T_, r_, q, sigma).price;
+    };
+    const hK = Math.max(0.01, K * 0.001);
+    const dCallDk = (callAt(S0, K - hK, T, r) - callAt(S0, K + hK, T, r)) / (2 * hK);
+    // digital call = -∂C/∂K, digital put = e^{-rT} - digital call (parity)
+    const dCall = dCallDk;
+    const price = type === 'call' ? dCall : (Math.exp(-r * T) - dCall);
+
+    // FD greeks (rough, but consistent with how Heston handles them)
+    const dPriceAt = (S, T_, r_, dK = hK) => {
+      const c = (callAt(S, K - dK, T_, r_) - callAt(S, K + dK, T_, r_)) / (2 * dK);
+      return type === 'call' ? c : (Math.exp(-r_ * T_) - c);
+    };
+    const hS = Math.max(0.01, S0 * 0.005);
+    const Pp = dPriceAt(S0 + hS, T, r);
+    const Pm = dPriceAt(S0 - hS, T, r);
+    const delta = (Pp - Pm) / (2 * hS);
+    const gamma = (Pp - 2 * price + Pm) / (hS * hS);
+    const hT = Math.max(1e-4, T * 0.01);
+    const theta = -(dPriceAt(S0, T + hT, r) - price) / hT / 365;
+    const hR = 1e-4;
+    const rho = (dPriceAt(S0, T, r + hR) - price) / hR / 100;
+    return { price, delta, gamma, vega: 0, theta, rho };
+  }
+});
 export const SLV_STUB = {
   id: 'slv',
   name: 'Stochastic Local Vol',
@@ -174,7 +291,7 @@ export const SLV_STUB = {
 export const MODELS = {
   gbm: GBM,
   heston: HESTON,
-  localvol: LV_STUB,
+  localvol: LV,
   slv: SLV_STUB
 };
 
