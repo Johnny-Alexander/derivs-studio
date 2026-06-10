@@ -1,0 +1,7 @@
+.venv
+frontend
+deploy
+**/__pycache__
+**/.pytest_cache
+*.db
+*.md
