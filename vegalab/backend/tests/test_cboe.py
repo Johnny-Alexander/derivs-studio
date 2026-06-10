@@ -13,8 +13,9 @@ import pytest
 from vegalab.data.providers.cboe import USER_AGENT, CboeProvider
 
 FIXTURE = Path(__file__).parent / "fixtures" / "cboe" / "_SPX_sample.json"
-# The fixture is frozen at this instant (see fixtures/cboe/_generate_sample.py).
-FROZEN_NOW = datetime(2026, 6, 10, 14, 45, 0, tzinfo=timezone.utc)
+# Real capture taken at this instant (see fixtures/cboe/README.md).
+FROZEN_NOW = datetime(2026, 6, 10, 9, 7, 11, tzinfo=timezone.utc)
+SPOT = 7386.6499
 URL = "https://cdn.cboe.com/api/global/delayed_quotes/options/_SPX.json"
 
 
@@ -26,6 +27,8 @@ def fixture_payload() -> dict:
     return json.loads(FIXTURE.read_text())
 
 
+# Constructed-row tests below keep their own spot; strikes were chosen
+# around this level.
 def minimal_payload(options: list[dict], spot: float = 6010.25) -> dict:
     return {"data": {"current_price": spot, "options": options}}
 
@@ -41,22 +44,30 @@ async def test_happy_path_from_fixture(serve):
     serve(fixture_payload())
     snap = await provider().get_snapshot()
 
-    assert snap.underlying_px == 6010.25
+    assert snap.underlying_px == SPOT
     assert snap.fetched_at == FROZEN_NOW
-    # 30 rows in the fixture; 4 are built to be dropped (both-zero quote,
-    # >15% moneyness, >120 DTE, |delta|>0.99).
-    assert len(snap.options) == 26
-    syn = [o for o in snap.options if o.synthetic_quote]
-    assert len(syn) == 1 and syn[0].symbol == "SPXW260619P05775000"
+    # 28 real rows in the fixture; 8 are dropped (far-OTM teenies on
+    # moneyness, 464/128 DTE on the DTE cut, |delta|>0.99 on the band).
+    assert len(snap.options) == 20
+    assert snap.synthetic_fraction == 0.0  # capture had no in-universe one-sided rows
 
-    o = next(o for o in snap.options if o.symbol == "SPXW260619C05750000")
-    assert o.root == "SPXW" and o.right == "C" and o.strike == 5750.0
-    assert o.expiry == date(2026, 6, 19)
-    assert o.bid == 265.59 and o.ask == 269.33
-    assert o.mid == pytest.approx((265.59 + 269.33) / 2)
-    assert o.iv == pytest.approx(0.1691)
-    assert o.delta == pytest.approx(0.9536)
-    assert o.volume == 350 and o.open_interest == 1200
+    dropped = {r["option"] for r in fixture_payload()["data"]["options"]}
+    dropped -= {o.symbol for o in snap.options}
+    assert dropped == {
+        "SPX260618P00200000", "SPX260618P00400000",   # ±15% moneyness
+        "SPX270917C00400000", "SPX270917C00600000",   # 464 DTE (also both-zero)
+        "SPX261016C06280000", "SPX261016P06280000",   # 128 DTE
+        "SPX260618P07770000", "SPX260618P07775000",   # |delta| > 0.99
+    }
+
+    o = next(o for o in snap.options if o.symbol == "SPX260618C07380000")
+    assert o.root == "SPX" and o.right == "C" and o.strike == 7380.0
+    assert o.expiry == date(2026, 6, 18)
+    assert o.bid == 67.2 and o.ask == 67.9
+    assert o.mid == pytest.approx((67.2 + 67.9) / 2)
+    assert o.iv == pytest.approx(0.1943)
+    assert o.delta == pytest.approx(0.436)
+    assert o.volume == 2270 and o.open_interest == 4583
     # Both roots make it through.
     assert {o.root for o in snap.options} == {"SPX", "SPXW"}
 
@@ -70,13 +81,15 @@ async def test_user_agent_header_present(serve, httpx_mock):
 
 
 async def test_missing_iv_triggers_solver(serve):
-    # iv=0 in the feed but a sane mid: the Brent solver must back out an IV
-    # close to the one the fixture's mid was generated from (~0.1547 smile).
+    # Real 0DTE deep-ITM puts with iv=0.0 in the feed but live two-sided
+    # quotes: the Brent solver must back out a usable IV from mid. The
+    # pre-market quotes are wide, so the solved vol is high but finite.
     serve(fixture_payload())
     snap = await provider().get_snapshot()
-    o = next(o for o in snap.options if o.symbol == "SPX260717C06025000")
-    assert 0.10 < o.iv < 0.25
-    assert o.iv >= 0.005
+    for sym in ("SPXW260610P07475000", "SPXW260610P07480000"):
+        o = next(o for o in snap.options if o.symbol == sym)
+        assert 0.3 < o.iv < 1.5
+        assert o.iv >= 0.005
 
 
 async def test_zero_bid_synthesis(serve):

@@ -81,9 +81,9 @@ cd vegalab
 .venv/bin/python -m pytest -v
 ```
 
-`tests/fixtures/cboe/_SPX_sample.json` is schema-accurate but generated, not
-a live capture — see `backend/tests/fixtures/cboe/README.md` for why and how
-to replace it with a real one.
+`tests/fixtures/cboe/_SPX_sample.json` is a real CBOE capture
+(2026-06-10 09:07 UTC, pre-market) trimmed to 28 rows — see
+`backend/tests/fixtures/cboe/README.md` for the selection.
 
 ## Roadmap
 
