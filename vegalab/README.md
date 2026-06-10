@@ -74,6 +74,42 @@ python -m vegalab.scripts.ingest_snapshot     # fetch + persist one snapshot (id
 - r = 0.0438, q = 0.015 hardcoded (see BACKLOG).
 - All DB timestamps UTC; ET only at display/cron-guard edges.
 
+## Phase 3 — backend app (FastAPI + trading + snapshot engine)
+
+- `backend/vegalab/api/` — app factory (`uvicorn vegalab.api.app:app`),
+  bearer-token auth (`users.api_token`, constant-time compare), CORS from
+  `CORS_ORIGINS` (comma-separated). Routes:
+  - `GET /chain?expiry=` — latest snapshot of the chain (expiry tabs)
+  - `POST /trade`, `GET /me/trades` — buys fill at ask, sells at bid, from
+    the latest snapshot; 422 if it's older than 30 min ("market data
+    stale"); |cash| capped at 5 × starting capital
+  - `GET /me/positions`, `POST /me/hedge_delta {target_delta}` — positions
+    with marks + net Greeks; the hedge stores
+    `delta_hedge_notional = −(options_delta − target) × S`
+  - `GET /me/pnl?granularity=snapshot|daily` — attribution series
+  - `GET /leaderboard?metric=pnl|sharpe|attribution`
+  - `POST /jobs/snapshot` — cron entrypoint, guarded by `X-Job-Secret`
+    (`JOB_SECRET` env); fetch → ingest → attribute, all in one call
+  - `GET /health` — last snapshot ts + configured provider, no auth
+- `backend/vegalab/services/` — `trading.py` (fills, average-cost,
+  realized PnL, cash accounting), `snapshots.py` (the engine: one
+  pnl_attribution row per account per snapshot ts, idempotent, one
+  transaction per account), `leaderboards.py` (pnl / sharpe ≥5 days /
+  attribution accuracy with a $100 noise floor).
+
+### Attribution conventions (engine)
+
+- Marks are MID at both interval ends; fills happen at bid/ask, so the
+  crossing cost shows up as immediate negative PnL on entry — by design.
+- A position opened mid-interval is attributed from its entry fill price
+  with Greeks from the fill-time snapshot.
+- σ missing/unusable at either end of the interval → that position's whole
+  interval PnL goes to residual (Greeks are never fabricated).
+- The synthetic delta hedge lives in the financing bucket:
+  `notional × (S₁/S₀ − 1) − r·|notional|·Δt`.
+- Buckets always sum to `total_pnl` by construction; the leaderboard's
+  attribution-accuracy metric scores how small you keep the residual.
+
 ## Running tests
 
 ```sh
@@ -87,6 +123,5 @@ cd vegalab
 
 ## Roadmap
 
-- **Phase 3**: FastAPI REST, auth, snapshot engine, leaderboard endpoints.
 - **Phase 4**: Next.js frontend (mockup in `spx_league_mockup.jsx`).
 - **Phase 5**: deploy — Supabase + Fly.io + Vercel + GitHub Actions cron.
