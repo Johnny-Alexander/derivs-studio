@@ -12,7 +12,7 @@ from datetime import datetime, timedelta, timezone
 import pytest
 
 from vegalab.db import session_scope
-from vegalab.models import PnlAttribution
+from vegalab.models import Account, PnlAttribution, User
 from vegalab.services.leaderboards import compute_leaderboard
 
 from .conftest import auth
@@ -97,6 +97,20 @@ def test_empty_league_pnl_is_zero(league):
         standings = compute_leaderboard(s, "pnl")
     assert len(standings) == 3
     assert all(x["value"] == 0.0 for x in standings)
+
+
+def test_null_values_sort_alphabetically_not_by_insertion(league):
+    # "aaron" is created AFTER alice/bob/carol; with every sharpe null,
+    # standings must come back alphabetical, not in account-id order.
+    with session_scope() as s:
+        user = User(name="aaron", api_token="token-aaron")
+        s.add(user)
+        s.flush()
+        s.add(Account(user_id=user.id, season_id=league["season_id"]))
+    with session_scope() as s:
+        standings = compute_leaderboard(s, "sharpe")
+    assert all(x["value"] is None for x in standings)
+    assert [x["user"] for x in standings] == ["aaron", "alice", "bob", "carol"]
 
 
 def test_sharpe_zero_variance_is_null(league):

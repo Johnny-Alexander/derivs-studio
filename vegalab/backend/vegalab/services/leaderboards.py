@@ -98,7 +98,9 @@ def compute_leaderboard(session: Session, metric: str) -> list[dict]:
             }
         )
 
-    standings.sort(key=lambda s: (s["value"] is None, -(s["value"] or 0.0)))
+    # Nulls sort last, alphabetically by user (not by insertion order);
+    # alphabetical also breaks ties between equal values.
+    standings.sort(key=lambda s: (s["value"] is None, -(s["value"] or 0.0), s["user"]))
     for rank, s in enumerate(standings, start=1):
         s["rank"] = rank
     return standings

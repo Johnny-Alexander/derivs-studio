@@ -44,9 +44,11 @@ def attribute(
 
     Returns a dict of dollar PnL contributions:
         delta_pnl, gamma_pnl, vega_pnl, theta_pnl,
-        vanna_pnl, charm_pnl, volga_pnl, financing_pnl,
+        vanna_pnl, charm_pnl, volga_pnl, hedge_pnl, financing_pnl,
         residual_pnl, total_pnl
-    where total_pnl == actual ΔPnL == qty * multiplier * (price_t1 − price_t0).
+    where hedge_pnl is the hedge leg's mark-to-market, financing_pnl is
+    interest-only carry, and total_pnl == actual ΔPnL
+    == qty * multiplier * (price_t1 − price_t0).
     """
     if account_state is None:
         account_state = {}
@@ -86,14 +88,14 @@ def attribute(
     notional = account_state.get("delta_hedge_notional", 0.0)
     cash_borrowed = account_state.get("cash_borrowed", 0.0)
     carry_rate = account_state.get("r", r)
-    hedge_mtm = notional * (S1 - S0) / S0 if S0 != 0 else 0.0
+    hedge_pnl = notional * (S1 - S0) / S0 if S0 != 0 else 0.0
     hedge_carry = -carry_rate * abs(notional) * dt
     borrow_carry = -carry_rate * cash_borrowed * dt
-    financing_pnl = hedge_mtm + hedge_carry + borrow_carry
+    financing_pnl = hedge_carry + borrow_carry
 
     residual_pnl = actual_pnl - (
         delta_pnl + gamma_pnl + vega_pnl + theta_pnl
-        + vanna_pnl + charm_pnl + volga_pnl + financing_pnl
+        + vanna_pnl + charm_pnl + volga_pnl + hedge_pnl + financing_pnl
     )
 
     return {
@@ -104,6 +106,7 @@ def attribute(
         "vanna_pnl": vanna_pnl,
         "charm_pnl": charm_pnl,
         "volga_pnl": volga_pnl,
+        "hedge_pnl": hedge_pnl,
         "financing_pnl": financing_pnl,
         "residual_pnl": residual_pnl,
         "total_pnl": actual_pnl,
