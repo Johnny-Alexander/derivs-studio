@@ -14,6 +14,36 @@ from ..deps import get_current_user, get_db
 router = APIRouter()
 
 
+@router.get("/chain/meta")
+def get_chain_meta(
+    db: Session = Depends(get_db),
+    _user: User = Depends(get_current_user),
+) -> dict:
+    """Header-strip payload: spot + quote age + expiries, no option rows."""
+    latest_ts = db.scalar(select(func.max(MarketSnapshot.snapshot_ts)))
+    if latest_ts is None:
+        return {"snapshot_ts": None, "fetched_at": None, "spot": None, "expiries": []}
+
+    sample = db.scalar(
+        select(MarketSnapshot).where(MarketSnapshot.snapshot_ts == latest_ts).limit(1)
+    )
+    expiries = sorted(
+        set(
+            db.scalars(
+                select(Instrument.expiry)
+                .join(MarketSnapshot, MarketSnapshot.instrument_id == Instrument.id)
+                .where(MarketSnapshot.snapshot_ts == latest_ts)
+            )
+        )
+    )
+    return {
+        "snapshot_ts": latest_ts,
+        "fetched_at": sample.fetched_at,
+        "spot": sample.underlying_px,
+        "expiries": expiries,
+    }
+
+
 @router.get("/chain")
 def get_chain(
     expiry: date | None = None,

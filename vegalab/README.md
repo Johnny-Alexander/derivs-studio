@@ -122,7 +122,33 @@ cd vegalab
 (2026-06-10 09:07 UTC, pre-market) trimmed to 28 rows — see
 `backend/tests/fixtures/cboe/README.md` for the selection.
 
+## Phase 4 — frontend (Next.js 14 + Tailwind + TanStack Query + Recharts)
+
+`frontend/` — dark, dense, monospaced terminal UI. Five screens:
+
+- **Chain** — expiry tabs, calls/strike/puts straddle table; ATM row in
+  amber; IV in cyan; ⚠ marks synthesized quotes. Click a BID to sell,
+  an ASK to buy → opens the ticket.
+- **Ticket** — slide-over (full-screen on phones): fill preview, Greeks
+  current/trade/after, Δ+½Γ scenario bars across spot moves.
+- **Positions** — net-Greek cards, hedge panel with FLATTEN DELTA
+  (`POST /me/hedge_delta {target_delta: 0}`), position table, trade
+  blotter with fill-quality flags.
+- **PnL** — cumulative stacked attribution area chart (hedge bucket in
+  violet), season bucket-breakdown bars, explained-% card.
+- **Leaderboard** — pnl / sharpe / attribution tabs with explainers.
+
+Conventions: green/red appear ONLY on direction and PnL sign; amber =
+active/ATM/self; persistent header shows spot, quote age, equity and
+net Δ Γ Θ 𝒱. Token entry → localStorage → `Authorization: Bearer` on
+every call; 30 s polling.
+
+```sh
+cd vegalab/frontend
+npm install
+NEXT_PUBLIC_API_URL=http://localhost:8000 npm run dev   # or .env.local
+```
+
 ## Roadmap
 
-- **Phase 4**: Next.js frontend (mockup in `spx_league_mockup.jsx`).
 - **Phase 5**: deploy — Supabase + Fly.io + Vercel + GitHub Actions cron.
