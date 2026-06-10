@@ -17,8 +17,9 @@ Interval conventions (v1, documented deviations in README):
   trade-aware interval PnL).
 - σ missing/unusable at t0 or t1, or no t0 market row at all → that
   position's whole interval PnL goes to residual (never fabricate Greeks).
-- Hedge leg: financing += notional × (S1/S0 − 1) − r × |notional| × Δt,
-  and the same amount is added to total so buckets keep summing to total.
+- Hedge leg: mark-to-market notional × (S1/S0 − 1) goes to hedge_pnl;
+  interest-only carry −r × |notional| × Δt goes to financing_pnl. Both are
+  added to total so buckets keep summing to total.
 - Idempotent on (account_id, snapshot_ts); each account runs in its own
   transaction so one failure cannot poison the others.
 """
@@ -45,7 +46,7 @@ MULTIPLIER = 100
 BUCKETS = (
     "delta_pnl", "gamma_pnl", "vega_pnl", "theta_pnl",
     "vanna_pnl", "charm_pnl", "volga_pnl",
-    "financing_pnl", "residual_pnl", "total_pnl",
+    "hedge_pnl", "financing_pnl", "residual_pnl", "total_pnl",
 )
 
 
@@ -233,16 +234,18 @@ def attribute_account(session: Session, account: Account, t1: datetime) -> bool:
         for k in BUCKETS:
             sums[k] += res[k]
 
-    # Hedge leg: fully explained by the financing bucket, so add it to both
-    # financing and total (residual unaffected).
+    # Hedge leg: MTM to hedge_pnl, interest-only carry to financing_pnl,
+    # both added to total (residual unaffected).
     notional = account.delta_hedge_notional
     if notional:
         s1_row = _underlying_at_or_before(session, t1)
         S0, S1 = baseline.underlying_px, s1_row.underlying_px
         dt_years = (t1 - t0_market_ts).total_seconds() / (365.0 * 86400.0)
-        hedge = notional * (S1 / S0 - 1.0) - r * abs(notional) * dt_years
-        sums["financing_pnl"] += hedge
-        sums["total_pnl"] += hedge
+        hedge_mtm = notional * (S1 / S0 - 1.0)
+        carry = -r * abs(notional) * dt_years
+        sums["hedge_pnl"] += hedge_mtm
+        sums["financing_pnl"] += carry
+        sums["total_pnl"] += hedge_mtm + carry
 
     session.add(PnlAttribution(account_id=account.id, snapshot_ts=t1, **sums))
     return True

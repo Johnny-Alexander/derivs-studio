@@ -13,7 +13,7 @@ See `../HANDOVER_FINISH.md` for the product spec and roadmap (Phases 2R → 5).
   mid price when the feed doesn't supply one.
 - `backend/vegalab/quant/attribution.py` — bucket the PnL change of a single
   position between two snapshots into delta / gamma / vega / theta /
-  vanna / charm / volga / financing / residual.
+  vanna / charm / volga / hedge / financing / residual.
 
 ## Phase 2R — data layer (CBOE primary, Yahoo fallback)
 
@@ -105,8 +105,9 @@ python -m vegalab.scripts.ingest_snapshot     # fetch + persist one snapshot (id
   with Greeks from the fill-time snapshot.
 - σ missing/unusable at either end of the interval → that position's whole
   interval PnL goes to residual (Greeks are never fabricated).
-- The synthetic delta hedge lives in the financing bucket:
-  `notional × (S₁/S₀ − 1) − r·|notional|·Δt`.
+- The synthetic delta hedge marks to market in its own bucket:
+  `hedge_pnl = notional × (S₁/S₀ − 1)`; financing is interest-only carry,
+  `financing_pnl = −r·|notional|·Δt` (migration `002_hedge_pnl`).
 - Buckets always sum to `total_pnl` by construction; the leaderboard's
   attribution-accuracy metric scores how small you keep the residual.
 

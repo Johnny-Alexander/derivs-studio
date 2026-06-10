@@ -153,25 +153,28 @@ def test_multiplier_applied():
     assert out["total_pnl"] == pytest.approx(expected, abs=1e-9)
 
 
-# ---------- Financing leg ----------
+# ---------- Hedge + financing legs ----------
 
-def test_financing_leg_zero_when_no_hedge():
+def test_hedge_and_financing_legs_zero_when_no_hedge():
     K, right, q, r = 100.0, "C", 0.02, 0.05
     t0 = _make_snap(100.0, K, 0.25, r, q, 0.20, right)
     t1 = _make_snap(101.0, K, 0.25 - 1/365, r, q, 0.20, right)
     out = attribute(5, K, right, q, t0, t1, account_state={})
+    assert out["hedge_pnl"] == 0.0
     assert out["financing_pnl"] == 0.0
 
 
-def test_financing_leg_long_hedge_gains_on_spot_up():
+def test_hedge_leg_long_hedge_gains_on_spot_up():
     """A +$10k long SPX hedge should gain ~ 10k * (S1-S0)/S0 ≈ $100 on +1%."""
     K, right, q, r = 100.0, "C", 0.02, 0.05
     t0 = _make_snap(100.0, K, 0.25, r, q, 0.20, right)
     t1 = _make_snap(101.0, K, 0.25, r, q, 0.20, right)
     state = {"delta_hedge_notional": 10_000.0, "r": r}
     out = attribute(0, K, right, q, t0, t1, account_state=state)
-    # Hedge MTM = 10000 * (101-100)/100 = 100
-    assert out["financing_pnl"] == pytest.approx(100.0, abs=1e-9)
+    # Hedge MTM = 10000 * (101-100)/100 = 100, booked in hedge_pnl;
+    # no time passed, so financing (interest-only) is zero.
+    assert out["hedge_pnl"] == pytest.approx(100.0, abs=1e-9)
+    assert out["financing_pnl"] == pytest.approx(0.0, abs=1e-9)
 
 
 def test_financing_leg_carries_negatively():
@@ -181,7 +184,8 @@ def test_financing_leg_carries_negatively():
     t1 = _make_snap(100.0, K, 0.25 - 1/365, r, q, 0.20, right)  # spot flat, 1d passes
     state = {"delta_hedge_notional": -50_000.0, "r": 0.05}  # short hedge
     out = attribute(0, K, right, q, t0, t1, account_state=state)
-    # hedge_mtm = 0, hedge_carry = -0.05 * 50000 * (1/365) ≈ -6.85
+    # hedge MTM = 0 (spot flat); carry = -0.05 * 50000 * (1/365) ≈ -6.85
+    assert out["hedge_pnl"] == pytest.approx(0.0, abs=1e-9)
     assert out["financing_pnl"] == pytest.approx(
         -0.05 * 50_000.0 * (1.0 / 365.0), abs=1e-9
     )

@@ -175,6 +175,10 @@ class PnlAttribution(Base):
     vanna_pnl: Mapped[float] = mapped_column(Float, nullable=False, default=0.0)
     charm_pnl: Mapped[float] = mapped_column(Float, nullable=False, default=0.0)
     volga_pnl: Mapped[float] = mapped_column(Float, nullable=False, default=0.0)
+    # Hedge leg mark-to-market; financing_pnl is interest-only carry.
+    hedge_pnl: Mapped[float] = mapped_column(
+        Float, nullable=False, default=0.0, server_default="0"
+    )
     financing_pnl: Mapped[float] = mapped_column(Float, nullable=False, default=0.0)
     residual_pnl: Mapped[float] = mapped_column(Float, nullable=False, default=0.0)
     total_pnl: Mapped[float] = mapped_column(Float, nullable=False, default=0.0)

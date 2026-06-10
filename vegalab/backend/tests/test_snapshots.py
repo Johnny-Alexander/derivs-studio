@@ -25,7 +25,8 @@ PUT = "SPXW260710P06000000"
 
 BUCKET_KEYS = [
     "delta_pnl", "gamma_pnl", "vega_pnl", "theta_pnl",
-    "vanna_pnl", "charm_pnl", "volga_pnl", "financing_pnl", "residual_pnl",
+    "vanna_pnl", "charm_pnl", "volga_pnl",
+    "hedge_pnl", "financing_pnl", "residual_pnl",
 ]
 
 
@@ -135,7 +136,7 @@ def test_missing_sigma_goes_to_residual(league):
         assert getattr(row, k) == 0.0
 
 
-def test_hedge_financing_leg(league):
+def test_hedge_mtm_and_financing_legs(league):
     account_id = seed_cycle_and_trade(league)
     with session_scope() as s:
         acct = s.get(Account, account_id)
@@ -147,12 +148,18 @@ def test_hedge_financing_leg(league):
     engine.ingest_and_attribute(chain(t1, 6030.0, [quote(CALL, 60.0, 61.0)]))
 
     row = attribution_rows(account_id)[-1]
-    # Hedge MTM: notional × (6030/6000 − 1) = −$1,500, plus a tiny carry cost.
-    assert row.financing_pnl == pytest.approx(notional * (6030.0 / 6000.0 - 1.0), rel=1e-3)
+    # Hedge MTM: notional × (6030/6000 − 1) = −$1,500 in its own bucket.
+    assert row.hedge_pnl == pytest.approx(notional * (6030.0 / 6000.0 - 1.0))
+    assert row.hedge_pnl < 0
+    # Financing is interest-only: −r × |notional| × Δt over 5 minutes.
+    dt_years = 5.0 / (60.0 * 24.0 * 365.0)
+    assert row.financing_pnl == pytest.approx(-0.0438 * abs(notional) * dt_years)
     assert row.financing_pnl < 0
     assert_buckets_sum_to_total(row)
-    # Total includes the hedge leg: option gained (60.5 − 46) × 100, hedge lost ~1.5k
-    assert row.total_pnl == pytest.approx((60.5 - 46.0) * 100 + row.financing_pnl)
+    # Total includes both hedge legs: option gained (60.5 − 46) × 100.
+    assert row.total_pnl == pytest.approx(
+        (60.5 - 46.0) * 100 + row.hedge_pnl + row.financing_pnl
+    )
 
 
 def test_one_account_failing_does_not_poison_others(league, monkeypatch):
