@@ -1,0 +1,16 @@
+{
+  "name": "Derivs Studio — multi-product pricer",
+  "short_name": "Derivs Studio",
+  "description": "Price and visualize vanilla, digital, and autocallable equity derivatives under GBM (with room for Heston/LV/SLV).",
+  "start_url": "./index.html",
+  "scope": "./",
+  "display": "standalone",
+  "orientation": "any",
+  "background_color": "#07080f",
+  "theme_color": "#07080f",
+  "categories": ["finance", "utilities", "education"],
+  "icons": [
+    { "src": "./icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any" },
+    { "src": "./icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "maskable" }
+  ]
+}

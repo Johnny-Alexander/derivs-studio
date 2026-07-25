@@ -1,0 +1,6 @@
+{
+  "type": "module",
+  "private": true,
+  "name": "derivs-studio-v4",
+  "description": "Multi-product equity derivatives pricer. Open index.html via a static server."
+}

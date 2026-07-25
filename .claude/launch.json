@@ -12,6 +12,12 @@
       "runtimeExecutable": "/usr/bin/python3",
       "runtimeArgs": ["v3/.devserver.py", "8766"],
       "port": 8766
+    },
+    {
+      "name": "v4",
+      "runtimeExecutable": "/usr/bin/python3",
+      "runtimeArgs": ["v4/.devserver.py", "8767"],
+      "port": 8767
     }
   ]
 }
