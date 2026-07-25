@@ -1,0 +1,24 @@
+name: season-rollover
+
+# 1st of every month, 13:00 UTC: archive last month's standings, open the
+# new season, and give every player a fresh $100k account. The endpoint is
+# idempotent, so a manual re-run is always safe.
+on:
+  schedule:
+    - cron: "0 13 1 * *"
+  workflow_dispatch:
+
+jobs:
+  rollover:
+    runs-on: ubuntu-latest
+    steps:
+      - name: POST /jobs/rollover
+        shell: bash
+        run: |
+          curl --fail-with-body --silent --show-error \
+            --retry 3 --retry-delay 15 --retry-all-errors \
+            --max-time 120 \
+            -X POST "https://vegalab-api.fly.dev/jobs/rollover" \
+            -H "X-Job-Secret: ${JOB_SECRET}"
+        env:
+          JOB_SECRET: ${{ secrets.JOB_SECRET }}

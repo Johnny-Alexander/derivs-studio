@@ -1,0 +1,33 @@
+# Fly.io config for the vegalab backend.
+#
+# primary_region fra sits next to the Supabase project (eu-central-1).
+# Every deploy runs "alembic upgrade head" from inside Fly's network
+# before the new machine takes traffic — the only place migrations run,
+# since dev boxes may not speak Postgres wire protocol to the pooler.
+
+app = "vegalab-api"
+primary_region = "fra"
+
+[build]
+  dockerfile = "Dockerfile"
+
+[deploy]
+  release_command = "alembic upgrade head"
+
+[http_service]
+  internal_port = 8080
+  force_https = true
+  auto_stop_machines = "stop"
+  auto_start_machines = true
+  min_machines_running = 0
+
+  [[http_service.checks]]
+    interval = "30s"
+    timeout = "5s"
+    grace_period = "30s"
+    method = "GET"
+    path = "/health"
+
+[[vm]]
+  size = "shared-cpu-1x"
+  memory = "512mb"
